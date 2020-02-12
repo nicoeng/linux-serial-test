@@ -61,6 +61,7 @@ int _cl_rs485_rts_after_send = 0;
 int _cl_tx_time = 0;
 int _cl_rx_time = 0;
 int _cl_ascii_range = 0;
+int _cl_test = 0;
 
 // Module variables
 unsigned char _write_count_value = 0;
@@ -242,7 +243,7 @@ static void process_options(int argc, char * argv[])
 {
 	for (;;) {
 		int option_index = 0;
-		static const char *short_options = "hb:p:d:R:TsSy:z:cBertq:Ql:a:w:o:i:P:kA";
+		static const char *short_options = "hb:p:d:R:TsSy:z:cBertq:Ql:a:w:o:i:P:kAx";
 		static const struct option long_options[] = {
 			{"help", no_argument, 0, 0},
 			{"baud", required_argument, 0, 'b'},
@@ -269,6 +270,7 @@ static void process_options(int argc, char * argv[])
 			{"tx-time", required_argument, 0, 'o'},
 			{"rx-time", required_argument, 0, 'i'},
 			{"ascii", no_argument, 0, 'A'},
+			{"test", no_argument, 0, 'x'},
 			{0,0,0,0},
 		};
 
@@ -377,8 +379,41 @@ static void process_options(int argc, char * argv[])
 		case 'A':
 			_cl_ascii_range = 1;
 			break;
+		case 'x':
+			_cl_test = 1;
+			break;
 		}
 	}
+}
+
+long long int test_last_tx = 0;
+long long int test_last_rx = 0;
+long long int test_last_errors = 0;
+
+static void dump_serial_port_test(void)
+{
+	char buff[100];
+	time_t now = time (0);
+	strftime (buff, 100, "%H:%M:%S", localtime (&now));
+	
+	if ((_read_count - test_last_rx > 0) && (_write_count - test_last_tx > 0) && (test_last_errors == _error_count))
+	{
+		printf("[%s] Test \033[1;32mOK\033[0m     - TX:%10lld - RX:%10lld - Errors:%10lld\n", buff, _write_count, _read_count, _error_count);
+	}
+	else
+	{
+		printf("[%s] Test \033[1;31mFAILED\033[0m - ", buff);
+		if (!(_write_count - test_last_tx > 0)) printf("\033[1;31m");
+		printf("TX:%10lld\033[0m - ", _write_count);
+		if (!(_read_count - test_last_rx > 0)) printf("\033[1;31m");
+		printf("RX:%10lld\033[0m - ", _read_count);
+		if (!(test_last_errors == _error_count)) printf("\033[1;31m");
+		printf("Errors:%10lld\033[0m\n", _error_count);
+	}
+	
+	test_last_rx = _read_count;
+	test_last_tx = _write_count;
+	test_last_errors = _error_count;
 }
 
 static void dump_serial_port_stats(void)
@@ -635,10 +670,11 @@ int main(int argc, char * argv[])
 		serial_poll.events &= ~POLLOUT;
 	}
 
-	struct timespec start_time, last_stat, last_timeout, last_read, last_write;
+	struct timespec start_time, last_stat, last_timeout, last_read, last_write, last_test;
 
 	clock_gettime(CLOCK_MONOTONIC, &start_time);
 	last_stat = start_time;
+	last_test = start_time;
 	last_timeout = start_time;
 	last_read = start_time;
 	last_write = start_time;
@@ -696,7 +732,7 @@ int main(int argc, char * argv[])
 				rx_timeout = 0;
 			}
 
-			if (rx_timeout || tx_timeout) {
+			if (!_cl_test && (rx_timeout || tx_timeout)) {
 				const char *s;
 				if (rx_timeout) {
 					printf("%s: No data received for %.1fs.",
@@ -715,9 +751,16 @@ int main(int argc, char * argv[])
 		}
 
 		if (_cl_stats) {
-			if (current.tv_sec - last_stat.tv_sec > 5) {
+			if (diff_ms(&current, &last_stat) > 5000) {
 				dump_serial_port_stats();
 				last_stat = current;
+			}
+		}
+		
+		if (_cl_test) {
+			if (diff_ms(&current, &last_test) > 500) {
+				dump_serial_port_test();
+				last_test = current;
 			}
 		}
 
